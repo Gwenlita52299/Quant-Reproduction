@@ -1,6 +1,7 @@
 import csv
 import datetime as dt
 from typing import Dict, List, Optional, Tuple, Union
+import os
 
 import gpflow
 import numpy as np
@@ -79,7 +80,7 @@ def fit_matern_kernel(
     m = gpflow.models.GPR(
         data=(
             time_series_data.loc[:,['X']].to_numpy(),
-            time_series_data.lov[:,['Y']].to_numpy(),
+            time_series_data.loc[:,['Y']].to_numpy(),
         ),
         kernel=Matern32(variance=variance, lengthscales=lengthscale),
         noise_variance=likelihood_variance,
@@ -89,9 +90,9 @@ def fit_matern_kernel(
         m.training_loss, m.trainable_variables, options=dict(maxiter=MAX_ITERATIONS)
     ).fun
     params = {
-        'KM_variance': m.kernel.variance.numpy(),
-        'KM_lengthscales': m.kernel.lengthscales.numpy(),
-        'KM_likelihood_variance': m.likelihood.variance.numpy(),
+        'kM_variance': m.kernel.variance.numpy(),
+        'kM_lengthscales': m.kernel.lengthscales.numpy(),
+        'kM_likelihood_variance': m.likelihood.variance.numpy(),
     }
     return nlml, params
 
@@ -251,7 +252,7 @@ def changepoint_loc_and_score(
         kC_likelihood_variance = kM_params['kM_likelihood_variance']
 
     try:
-        (kC_changepoint_location, kC_nlml, kC_params) = fit_changepoint_kernel(
+        (changepoint_location, kC_nlml, kC_params) = fit_changepoint_kernel(
             time_series_data,
             k1_variance=k1_variance,
             k1_lengthscale=k1_lengthscale,
@@ -310,6 +311,11 @@ def run_module(
             -(lookback_window_length + 1):,:
         ]
         remaining_data = time_series_data.loc[start_date:end_date,:]
+        if remaining_data.empty:
+            print(f"⚠️ 警告：数据在 {start_date} 之前已耗尽或为空，跳过此日期。")
+            # 根据逻辑，这里可能需要 break, return 或者 continue
+            # 假设这是在一个循环里，或者直接返回
+            return  # 或者 break
         if remaining_data.index[0] == start_date:
             remaining_data = remaining_data.iloc[1:,:]
         else:
@@ -329,6 +335,12 @@ def run_module(
         else:
             first_window = first_window.iloc[1:]
         time_series_data = pd.concat([first_window, remaining_data]).copy()
+
+    # 获取 output_csv_file_path 的父目录（即 data/quandl_cpd_21lbw）
+    output_dir = os.path.dirname(output_csv_file_path)
+
+    # 如果这个目录不存在，就递归创建它
+    os.makedirs(output_dir, exist_ok=True)
 
     csv_fields = ['date','t','cp_location','cp_location_norm','cp_score']
     with open(output_csv_file_path, 'w') as f:
@@ -361,7 +373,11 @@ def run_module(
                     kC_likelihood_variance=1.0,
                 )
         
-        except:
+        except Exception as e:
+            # 打印具体的错误信息，方便调试
+            print(f"❌ 计算失败 (Window End: {window_end}): {e}")
+            import traceback
+            traceback.print_exc() # 打印完整堆栈:
             # 失败则写NA
             cp_score, cp_loc, cp_loc_normalised = 'NA','NA','NA'
 
