@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import warnings
 
 from typing import Dict, List, Tuple
 
@@ -18,7 +19,7 @@ VOL_TARGET = 0.15
 '''
 原文件中给定的窗口期和波动率目标
 '''
-
+'''
 def cal_performance_metrics(data: pd.DataFrame, metric_suffix="", num_identifiers = None) -> dict:
     """计算策略指标
 
@@ -58,6 +59,190 @@ def cal_performance_metrics_subset(ars: pd.DataFrame, metric_suffix="") -> dict:
         f'downside_risk{metric_suffix}': downside_risk(ars),
         f'max_drawdown{metric_suffix}': -max_drawdown(ars),
     }
+'''
+def cal_performance_metrics(data: pd.DataFrame, metric_suffix="", num_identifiers = None) -> dict:
+    """计算策略指标
+    
+    参数：
+        日收益率(pd.DataFrame):index为日期的日收益率DataFrame
+    
+    输出：
+        dict：各项指标的字典
+    """
+    # 抑制 empyrical 的 RuntimeWarning
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=RuntimeWarning)
+        
+        try:
+            if not num_identifiers:
+                num_identifiers = len(data.dropna()["identifier"].unique())
+            
+            # ars(average returns)是按日期合并收益率后取品种的平均收益率
+            ars = data.dropna().groupby(level=0)['captured_returns'].sum() / num_identifiers
+            
+            # 数据有效性检查
+            if len(ars) == 0:
+                print(f"⚠️  没有有效数据{metric_suffix}")
+                return _get_nan_metrics(metric_suffix)
+            
+            # 检查累计收益（用于判断某些指标是否可计算）
+            cum_returns = (1 + ars).prod()
+            
+            # 计算各项指标（带错误保护）
+            metrics = {}
+            
+            # Annual return（只有累计收益为正时才计算）
+            try:
+                metrics[f'annual_return{metric_suffix}'] = annual_return(ars) if cum_returns > 0 else np.nan
+            except:
+                metrics[f'annual_return{metric_suffix}'] = np.nan
+            
+            # Annual volatility
+            try:
+                metrics[f'annual_volatility{metric_suffix}'] = annual_volatility(ars)
+            except:
+                metrics[f'annual_volatility{metric_suffix}'] = np.nan
+            
+            # Sharpe ratio
+            try:
+                metrics[f'sharpe_ratio{metric_suffix}'] = sharpe_ratio(ars)
+            except:
+                metrics[f'sharpe_ratio{metric_suffix}'] = np.nan
+            
+            # Downside risk
+            try:
+                metrics[f'downside_risk{metric_suffix}'] = downside_risk(ars)
+            except:
+                metrics[f'downside_risk{metric_suffix}'] = np.nan
+            
+            # Sortino ratio
+            try:
+                metrics[f'sortino_ratio{metric_suffix}'] = sortino_ratio(ars)
+            except:
+                metrics[f'sortino_ratio{metric_suffix}'] = np.nan
+            
+            # Max drawdown
+            try:
+                metrics[f'max_drawdown{metric_suffix}'] = -max_drawdown(ars)
+            except:
+                metrics[f'max_drawdown{metric_suffix}'] = np.nan
+            
+            # Calmar ratio
+            try:
+                metrics[f'calmar_ratio{metric_suffix}'] = calmar_ratio(ars)
+            except:
+                metrics[f'calmar_ratio{metric_suffix}'] = np.nan
+            
+            # Win rate（胜率）
+            try:
+                if len(ars) > 0:
+                    metrics[f'win_rate{metric_suffix}'] = len(ars[ars > 0.0]) / len(ars)
+                else:
+                    metrics[f'win_rate{metric_suffix}'] = np.nan
+            except:
+                metrics[f'win_rate{metric_suffix}'] = np.nan
+            
+            # Profit/Loss ratio（盈亏比）
+            try:
+                positive_ars = ars[ars > 0.0]
+                negative_ars = ars[ars < 0.0]
+                
+                if len(positive_ars) > 0 and len(negative_ars) > 0:
+                    avg_loss = np.mean(np.abs(negative_ars))
+                    if avg_loss != 0:
+                        metrics[f'profit_loss_ratio{metric_suffix}'] = np.mean(positive_ars) / avg_loss
+                    else:
+                        metrics[f'profit_loss_ratio{metric_suffix}'] = np.nan
+                else:
+                    metrics[f'profit_loss_ratio{metric_suffix}'] = np.nan
+            except:
+                metrics[f'profit_loss_ratio{metric_suffix}'] = np.nan
+            
+            return metrics
+            
+        except Exception as e:
+            print(f"⚠️  计算性能指标失败{metric_suffix}: {e}")
+            return _get_nan_metrics(metric_suffix)
+
+
+def cal_performance_metrics_subset(ars: pd.Series, metric_suffix="") -> dict:
+    """计算策略指标（子集版本，用于重缩放）
+    
+    参数：
+        平均日收益率(pd.Series):index为日期的日收益率Series
+    
+    输出：
+        dict：各项指标的字典
+    """
+    # 抑制 empyrical 的 RuntimeWarning
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=RuntimeWarning)
+        
+        try:
+            # 数据有效性检查
+            if len(ars) == 0:
+                print(f"⚠️  没有有效数据{metric_suffix}")
+                return {
+                    f'annual_return{metric_suffix}': np.nan,
+                    f'annual_volatility{metric_suffix}': np.nan,
+                    f'downside_risk{metric_suffix}': np.nan,
+                    f'max_drawdown{metric_suffix}': np.nan,
+                }
+            
+            # 检查累计收益
+            cum_returns = (1 + ars).prod()
+            
+            metrics = {}
+            
+            # Annual return
+            try:
+                metrics[f'annual_return{metric_suffix}'] = annual_return(ars) if cum_returns > 0 else np.nan
+            except:
+                metrics[f'annual_return{metric_suffix}'] = np.nan
+            
+            # Annual volatility
+            try:
+                metrics[f'annual_volatility{metric_suffix}'] = annual_volatility(ars)
+            except:
+                metrics[f'annual_volatility{metric_suffix}'] = np.nan
+            
+            # Downside risk
+            try:
+                metrics[f'downside_risk{metric_suffix}'] = downside_risk(ars)
+            except:
+                metrics[f'downside_risk{metric_suffix}'] = np.nan
+            
+            # Max drawdown
+            try:
+                metrics[f'max_drawdown{metric_suffix}'] = -max_drawdown(ars)
+            except:
+                metrics[f'max_drawdown{metric_suffix}'] = np.nan
+            
+            return metrics
+            
+        except Exception as e:
+            print(f"⚠️  计算性能指标子集失败{metric_suffix}: {e}")
+            return {
+                f'annual_return{metric_suffix}': np.nan,
+                f'annual_volatility{metric_suffix}': np.nan,
+                f'downside_risk{metric_suffix}': np.nan,
+                f'max_drawdown{metric_suffix}': np.nan,
+            }
+
+def _get_nan_metrics(suffix=""):
+    """返回所有指标为 NaN 的字典（辅助函数）"""
+    return {
+        f'annual_return{suffix}': np.nan,
+        f'annual_volatility{suffix}': np.nan,
+        f'sharpe_ratio{suffix}': np.nan,
+        f'downside_risk{suffix}': np.nan,
+        f'sortino_ratio{suffix}': np.nan,
+        f'max_drawdown{suffix}': np.nan,
+        f'calmar_ratio{suffix}': np.nan,
+        f'win_rate{suffix}': np.nan,
+        f'profit_loss_ratio{suffix}': np.nan,
+    }
+
 
 def cal_net_returns(data: pd.DataFrame, list_basis_points: List[float], identifiers = None):
     if not identifiers:
@@ -98,7 +283,7 @@ def cal_sharpe_by_year(data: pd.DataFrame, suffix: str = None) -> dict:
         .apply(lambda y: sharpe_ratio(y['captured_returns'])) #按年份分组计算 Sharpe ratio
     )
 
-    sharpes.index = 'sharpe_ratio_' + shapres.index.map(int).map(str) + suffix
+    sharpes.index = 'sharpe_ratio_' + sharpes.index.map(int).map(str) + suffix
 
     return sharpes.to_dict()
 
