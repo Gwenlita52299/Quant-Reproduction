@@ -66,11 +66,11 @@ class ModelFeatures:
         total_time_steps,
         start_boundary=2017,
         test_boundary=2024,
-        test_end=2025,
+        test_end=2026,
         changepoint_lbws=None,
         train_valid_sliding=False,
         # add_buffer_years_to_test=1,  # TODO FIX THIS!!!!
-        transform_real_inputs=False,  # TODO remove this
+        transform_real_inputs=True,  # TODO remove this
         train_valid_ratio=0.9,
         split_tickers_individually=True,
         add_ticker_as_static=False,
@@ -179,7 +179,7 @@ class ModelFeatures:
 
         if split_tickers_individually:
             trainvalid = df.loc[years < test_boundary]
-            if lags:
+            if lags: #保证滑动窗口能完整覆盖
                 tickers = (
                     trainvalid.groupby("ticker")["ticker"].count()
                     * (1.0 - train_valid_ratio)
@@ -314,6 +314,10 @@ class ModelFeatures:
         )
 
         data = df[real_inputs].values
+        data = np.where(np.isfinite(data), data, np.nan)
+        col_means = np.nanmean(data, axis=0)
+        inds = np.where(np.isnan(data))
+        data[inds] = np.take(col_means, inds[1])
         self._real_scalers = sklearn.preprocessing.StandardScaler().fit(data)
         self._target_scaler = sklearn.preprocessing.StandardScaler().fit(
             df[[target_column]].values
@@ -366,17 +370,47 @@ class ModelFeatures:
             {InputTypes.ID, InputTypes.TIME, InputTypes.TARGET},
         )
 
+        # 【新增】在任何转换之前先清理 Inf/NaN
+        # 与 set_scalers 中的处理逻辑保持一致
+        if len(real_inputs) > 0:
+            data = output[real_inputs].values
+            
+            # 检查是否有 Inf
+            inf_count = np.isinf(data).sum()
+            if inf_count > 0:
+                print(f"[transform_inputs] 检测到 {inf_count} 个 Inf 值，正在清理...")
+            
+            # 清理 Inf 和 NaN（与 set_scalers 中的逻辑一致）
+            data = np.where(np.isfinite(data), data, np.nan)
+            col_means = np.nanmean(data, axis=0)
+            
+            # 处理全是 NaN 的列（设置均值为 0）
+            col_means = np.where(np.isnan(col_means), 0.0, col_means)
+            
+            # 填充 NaN
+            inds = np.where(np.isnan(data))
+            data[inds] = np.take(col_means, inds[1])
+            
+            # 写回 DataFrame
+            output[real_inputs] = data
+            
+            # 验证清理结果
+            remaining_inf = np.isinf(output[real_inputs].values).sum()
+            remaining_nan = np.isnan(output[real_inputs].values).sum()
+            if remaining_inf > 0 or remaining_nan > 0:
+                raise ValueError(f"清理后仍有 Inf({remaining_inf}) 或 NaN({remaining_nan})")
+
         # Format real inputs
         if self.transform_real_inputs:
-            output[real_inputs] = self._real_scalers.transform(df[real_inputs].values)
+            output[real_inputs] = self._real_scalers.transform(output[real_inputs].values)
 
         # Format categorical inputs
         for col in categorical_inputs:
-            string_df = df[col].apply(str)
+            string_df = output[col].apply(str)
             output[col] = self._cat_scalers[col].transform(string_df)
 
         return output
-
+    
     def format_predictions(self, predictions):
         """Reverts any normalisation to give predictions in original scale.
         Args:
@@ -512,10 +546,24 @@ class ModelFeatures:
                     "inputs": input_cols,
                 }
 
-                for k in col_mappings:
-                    cols = col_mappings[k]
+                # 先统一算一遍，看这个实体是否有足够长度
+                tmp = {}
+                skip_entity = False
+                for k, cols in col_mappings.items():
                     arr = _batch_single_entity(sliced[cols].copy())
+                    if arr is None:
+                        # 这个 ticker 时间序列太短，整个实体跳过
+                        skip_entity = True
+                        break
+                    tmp[k] = arr
 
+                if skip_entity:
+                    # 可选：打印一下方便调试
+                    # print(f"[WARN] skip entity {sliced[id_col].iloc[0]}: len<{self.total_time_steps}")
+                    continue
+
+                # 长度够，才写入 data_map
+                for k, arr in tmp.items():
                     if k not in data_map:
                         data_map[k] = [arr]
                     else:
@@ -570,7 +618,7 @@ class ModelFeatures:
                 active_entries = np.ones((arr.shape[0], arr.shape[1], arr.shape[2]))
                 for i in range(batch_size):
                     active_entries[i, sequence_lengths[i] :, :] = 0
-                sequence_lengths = np.array(sequence_lengths, dtype=np.int)
+                sequence_lengths = np.array(sequence_lengths, dtype=int)
 
                 if "active_entries" not in data_map:
                     data_map["active_entries"] = [
@@ -783,3 +831,5 @@ class ModelFeatures:
         }
 
         return locations
+
+
